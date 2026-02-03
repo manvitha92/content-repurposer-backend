@@ -1,0 +1,13 @@
+{
+  "name": "content-repurposer-backend",
+  "version": "1.0.0",
+  "description": "Backend API for Content Repurposer",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.0"
+  }
+}
