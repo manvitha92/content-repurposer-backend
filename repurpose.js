@@ -1,6 +1,6 @@
 // Vercel Serverless Function for Content Repurposing
 export default async function handler(req, res) {
-  // Enable CORS
+  // Enable CORS - CRITICAL FOR CROSS-DOMAIN REQUESTS
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -9,7 +9,7 @@ export default async function handler(req, res) {
     'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
   );
 
-  // Handle OPTIONS request for CORS
+  // Handle OPTIONS request (CORS preflight)
   if (req.method === 'OPTIONS') {
     res.status(200).end();
     return;
@@ -25,14 +25,15 @@ export default async function handler(req, res) {
 
     // Validate input
     if (!content || !formats || formats.length === 0 || !tone) {
-      return res.status(400).json({ error: 'Missing required fields' });
+      return res.status(400).json({ error: 'Missing required fields: content, formats, and tone are required' });
     }
 
     // Get API key from environment variable
     const apiKey = process.env.ANTHROPIC_API_KEY;
     
     if (!apiKey) {
-      return res.status(500).json({ error: 'API key not configured' });
+      console.error('ANTHROPIC_API_KEY not configured');
+      return res.status(500).json({ error: 'API key not configured. Please check environment variables.' });
     }
 
     // Prepare format instructions
@@ -45,6 +46,8 @@ export default async function handler(req, res) {
       };
       return formatMap[formatId];
     }).join(', ');
+
+    console.log('Calling Anthropic API...');
 
     // Call Anthropic API
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -86,11 +89,12 @@ Only include the formats I requested: ${formats.join(', ')}. Make each version u
       console.error('Anthropic API error:', errorData);
       return res.status(response.status).json({ 
         error: 'AI service error', 
-        details: errorData 
+        details: errorData.error?.message || 'Unknown error'
       });
     }
 
     const data = await response.json();
+    console.log('Anthropic API success');
     
     // Extract text from response
     const textContent = data.content
@@ -107,6 +111,8 @@ Only include the formats I requested: ${formats.join(', ')}. Make each version u
       format: formatId,
       content: parsedResults[formatId] || 'Content generation failed'
     }));
+
+    console.log('Returning success response');
 
     // Return success
     return res.status(200).json({
