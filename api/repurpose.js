@@ -1,6 +1,8 @@
-// Vercel Serverless Function for Content Repurposing
+// Enhanced Vercel Serverless Function for Content Repurposing
+// Includes: URL extraction, Analytics, Multi-language support
+
 export default async function handler(req, res) {
-  // Enable CORS - CRITICAL FOR CROSS-DOMAIN REQUESTS
+  // Enable CORS
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -21,31 +23,77 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { content, formats, tone } = req.body;
+    const { content, formats, tone, language = 'en', url, userCountry } = req.body;
 
-    // Validate input
-    if (!content || !formats || formats.length === 0 || !tone) {
-      return res.status(400).json({ error: 'Missing required fields: content, formats, and tone are required' });
+    // URL content extraction
+    let finalContent = content;
+    if (url && !content) {
+      try {
+        // Extract content from URL using a simple fetch
+        const urlResponse = await fetch(url);
+        const html = await urlResponse.text();
+        
+        // Simple text extraction (remove HTML tags)
+        finalContent = html
+          .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+          .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .substring(0, 3000); // Limit to first 3000 chars
+      } catch (urlError) {
+        console.error('URL extraction error:', urlError);
+        return res.status(400).json({ error: 'Failed to extract content from URL' });
+      }
     }
 
-    // Get API key from environment variable
+    // Validate input
+    if (!finalContent || !formats || formats.length === 0 || !tone) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: content (or url), formats, and tone are required' 
+      });
+    }
+
+    // Get API key
     const apiKey = process.env.ANTHROPIC_API_KEY;
     
     if (!apiKey) {
       console.error('ANTHROPIC_API_KEY not configured');
-      return res.status(500).json({ error: 'API key not configured. Please check environment variables.' });
+      return res.status(500).json({ error: 'API key not configured' });
     }
 
-    // Prepare format instructions
-    const formatInstructions = formats.map(formatId => {
-      const formatMap = {
-        tweet: 'a Twitter thread (3-5 tweets, each under 280 characters, numbered, engaging hooks)',
-        linkedin: 'a LinkedIn post (professional, 150-200 words, with line breaks for readability, include relevant hashtags)',
-        video: 'a video script (with intro hook, main points with timestamps, and outro call-to-action)',
-        instagram: 'an Instagram caption (engaging, 125-150 words, with emojis and relevant hashtags)'
-      };
-      return formatMap[formatId];
-    }).join(', ');
+    // Language mapping
+    const languageNames = {
+      en: 'English',
+      es: 'Spanish',
+      fr: 'French',
+      de: 'German',
+      pt: 'Portuguese',
+      it: 'Italian',
+      ja: 'Japanese',
+      zh: 'Chinese'
+    };
+
+    const targetLanguage = languageNames[language] || 'English';
+
+    // Enhanced format instructions with new formats
+    const formatMap = {
+      tweet: 'a Twitter thread (3-5 tweets, each under 280 characters, numbered, engaging hooks)',
+      linkedin: 'a LinkedIn post (professional, 150-200 words, with line breaks for readability, include relevant hashtags)',
+      video: 'a video script (with intro hook, main points with timestamps, and outro call-to-action)',
+      instagram: 'an Instagram caption (engaging, 125-150 words, with emojis and relevant hashtags)',
+      email: 'an email newsletter (professional subject line, engaging intro, clear sections, strong CTA)',
+      blog: 'a blog post introduction (compelling hook, 2-3 engaging paragraphs, SEO-optimized)',
+      podcast: 'a podcast script (conversational tone, natural transitions, questions for guest, 3-5 minute segment)',
+      tiktok: 'a TikTok video script (15-60 second hook, punchy delivery, trending language, call-to-action)',
+      press: 'a press release (formal AP style, headline, dateline, quote, boilerplate, contact info)',
+      medium: 'a Medium article (thought-provoking title, engaging subheadings, 800-1000 words, storytelling approach)'
+    };
+
+    const formatInstructions = formats
+      .map(formatId => formatMap[formatId])
+      .filter(Boolean)
+      .join(', ');
 
     console.log('Calling Anthropic API...');
 
@@ -59,26 +107,35 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
+        max_tokens: 4000,
         messages: [
           {
             role: 'user',
             content: `Transform the following content into ${formatInstructions}.
 
 Tone: ${tone}
+Language: ${targetLanguage} (write ALL outputs in ${targetLanguage})
 
 Original Content:
-${content}
+${finalContent}
 
 Return ONLY a JSON object with this exact structure (no markdown, no preamble):
 {
   "tweet": "...",
   "linkedin": "...",
   "video": "...",
-  "instagram": "..."
+  "instagram": "...",
+  "email": "...",
+  "blog": "...",
+  "podcast": "...",
+  "tiktok": "...",
+  "press": "...",
+  "medium": "..."
 }
 
-Only include the formats I requested: ${formats.join(', ')}. Make each version unique and optimized for its platform.`
+Only include the formats I requested: ${formats.join(', ')}. 
+Make each version unique and optimized for its platform.
+Write EVERYTHING in ${targetLanguage}.`
           }
         ]
       })
@@ -106,18 +163,36 @@ Only include the formats I requested: ${formats.join(', ')}. Make each version u
     const cleanJson = textContent.replace(/```json|```/g, '').trim();
     const parsedResults = JSON.parse(cleanJson);
 
-    // Format results
+    // Format results with character counts
     const formattedResults = formats.map(formatId => ({
       format: formatId,
-      content: parsedResults[formatId] || 'Content generation failed'
+      content: parsedResults[formatId] || 'Content generation failed',
+      characterCount: (parsedResults[formatId] || '').length,
+      wordCount: (parsedResults[formatId] || '').split(/\s+/).length
     }));
 
     console.log('Returning success response');
 
+    // Log analytics (in production, save to database)
+    console.log('Analytics:', {
+      timestamp: new Date().toISOString(),
+      formats: formats,
+      tone: tone,
+      language: language,
+      country: userCountry || 'unknown',
+      contentLength: finalContent.length,
+      fromUrl: !!url
+    });
+
     // Return success
     return res.status(200).json({
       success: true,
-      results: formattedResults
+      results: formattedResults,
+      metadata: {
+        language: targetLanguage,
+        originalLength: finalContent.length,
+        extractedFromUrl: !!url
+      }
     });
 
   } catch (error) {
